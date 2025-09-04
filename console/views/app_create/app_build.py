@@ -62,7 +62,7 @@ class AppBuild(AppBaseView, CloudEnterpriseCenterView):
             self.service = new_service
 
             # 为 KubeBlocks 添加连接信息
-            kubeblocks_service.add_database_env_vars(self.tenant, self.service, self.user, self.region.region_name)
+            # kubeblocks_service.add_database_env_vars(self.tenant, self.service, self.user, self.region.region_name)
              
             if is_deploy:
                 try:

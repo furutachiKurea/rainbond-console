@@ -187,7 +187,7 @@ class KubeBlocksClustersView(RegionTenantHeaderView):
                 return Response(general_message(400, "params error", error_msg), status=400)
             
             # 创建 Cluster 和 KubeBlocks Component
-            success, data = kubeblocks_service.create_database_cluster(
+            success, data = kubeblocks_service.create_cluster(
                 self.tenant, 
                 self.user, 
                 self.response_region, 

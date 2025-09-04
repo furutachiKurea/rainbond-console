@@ -18,136 +18,116 @@ region_api = RegionInvokeApi()
 
 class KubeBlocksService(object):
     
-    @transaction.atomic
-    def create_database_cluster(self, tenant, user, region_name, cluster_params):
+    def create_cluster(self, tenant, user, region_name, cluster_params, kubeblocks_service):
         """
-        创建数据库集群（用户感知为通过容器镜像创建 Rainbond 组件）
-
+        创建 KubeBlocks 数据库集群
+        
+        纯集群创建逻辑，不涉及组件创建。接收已创建的 kubeblocks 组件对象，
+        调用 Region API 创建对应的 KubeBlocks 集群。
+        
+        Args:
+            tenant: 租户对象
+            user: 用户对象
+            region_name (str): 区域名称
+            cluster_params (dict): 集群创建参数
+            kubeblocks_service: 已创建的 kubeblocks 组件对象
+            
+        Returns:
+            tuple: (success: bool, cluster_data: dict)
+                - success: 是否创建成功
+                - cluster_data: 集群创建结果数据
         """
         try:
-            # 提取参数
-            group_id = cluster_params.get("group_id")
-            cluster_name = cluster_params["cluster_name"]
-            database_type = cluster_params["database_type"]
-            version = cluster_params["version"]
-            k8s_component_name = cluster_params.get("k8s_component_name", "")
-            arch = cluster_params.get("arch", "amd64")
-            
-            service_cname = cluster_name
-            docker_cmd = "alpine/socat:1.8.0.3"
-            image = ""
-            image_type = "docker_image"
-            
-            if k8s_component_name and app_service.is_k8s_component_name_duplicate(group_id, k8s_component_name):
-                raise ErrK8sComponentNameExists
-            
-            code, msg_show, new_service = app_service.create_docker_run_app(
-                region_name,
-                tenant,
-                user,
-                service_cname,
-                docker_cmd,
-                image_type,
-                k8s_component_name,
-                image,
-                arch
-            )
-            
-            if code != 200:
+            # 参数验证
+            is_valid, error_msg = self.validate_cluster_params(cluster_params)
+            if not is_valid:
+                logger.error(f"KubeBlocks 集群参数验证失败: {error_msg}")
                 return False, None
             
-            new_service.service_name = new_service.k8s_component_name
-            new_service.save()
+            # 构建集群创建请求数据
+            cluster_data = self._build_block_mechanica_request(cluster_params, kubeblocks_service, tenant.namespace)
+            # 调用 Region API 创建集群
+            res, body = region_api.create_kubeblocks_cluster(region_name, cluster_data)
             
-            code, msg_show = group_service.add_service_to_group(
-                tenant,
-                region_name,
-                group_id,
-                new_service.service_id
-            )
-            
-            if code != 200:
-                new_service.delete()
+            if res.get("status") != 200:
+                error_msg = f"KubeBlocks 集群创建失败: {body}"
+                logger.error(error_msg)
                 return False, None
             
-            cluster_data = self._build_block_mechanica_request(cluster_params, new_service, tenant.namespace)
+            logger.info(f"成功创建 KubeBlocks 集群: {cluster_params.get('cluster_name')}")
+            return True, body
             
-            try:
-                res, body = region_api.create_kubeblocks_database_cluster(region_name, cluster_data)
-                
-                if res.get("status") != 200:
-                    logger.error(f"KubeBlocks 集群创建失败，但组件创建成功: {body}")
-            except Exception as cluster_error:
-                logger.exception(f"KubeBlocks 集群创建异常，但组件创建成功: {str(cluster_error)}")
-            
-            result_data = new_service.to_dict()
-            result_data["app_alias"] = new_service.service_alias
-            result_data["group_id"] = group_id
-            
-            logger.info(f"成功通过镜像创建组件: {service_cname}")
-            return True, result_data
-                
         except Exception as e:
-            logger.exception(f"创建组件异常: {str(e)}")
+            logger.exception(f"创建 KubeBlocks 集群异常: {str(e)}")
             return False, None
     
     def add_database_env_vars(self, tenant, service, user, region_name):
         """
         为数据库组件添加环境变量
-
+        
+        失败时抛出ServiceHandleException异常
         """
-        try:
-            env_service = AppEnvVarService()
+        from console.exception.main import ServiceHandleException
+        
+        env_service = AppEnvVarService()
+        
+        # 获取数据库连接信息
+        connect_info = self._get_database_connect_info(service, region_name)
+        
+        if not connect_info.get("username") and not connect_info.get("password"):
+            raise ServiceHandleException(
+                msg="无法获取数据库连接信息",
+                msg_show="获取数据库连接信息失败"
+            )
+        
+        # 添加数据库连接信息
+        env_vars = [
+            {
+                "name": "Password",
+                "attr_name": "DB_PASS",
+                "attr_value": connect_info.get("password", ""),
+                "scope": "outer"
+            },
+            {
+                "name": "Username", 
+                "attr_name": "DB_USER",
+                "attr_value": connect_info.get("username", "root"),
+                "scope": "outer"
+            }
+        ]
+        
+        # 添加环境变量，失败时抛出异常
+        for env_var in env_vars:
+            if not env_var["attr_value"]:
+                continue
+                
+            code, msg, env = env_service.add_service_env_var(
+                tenant=tenant,
+                service=service,
+                container_port=0,
+                name=env_var["name"],
+                attr_name=env_var["attr_name"],
+                attr_value=env_var["attr_value"],
+                is_change=True,
+                scope=env_var["scope"],
+                user_name=user.get_username()
+            )
             
-            connect_info = self._get_database_connect_info(service, region_name)
-            
-            if not connect_info.get("username") and not connect_info.get("password"):
-                return
-            
-            # 添加数据库连接信息
-            env_vars = [
-                {
-                    "name": "Password",
-                    "attr_name": "DB_PASS",
-                    "attr_value": connect_info.get("password", ""),  # 默认值
-                    "scope": "outer"
-                },
-                {
-                    "name": "Username", 
-                    "attr_name": "DB_USER",
-                    "attr_value": connect_info.get("username", "root"),  # 默认值
-                    "scope": "outer"
-                }
-            ]
-            
-            # 只添加非空值的环境变量
-            for env_var in env_vars:
-                if not env_var["attr_value"]:
-                    continue
-                    
-                try:
-                    env_service.add_service_env_var(
-                        tenant=tenant,
-                        service=service,
-                        container_port=0,
-                        name=env_var["name"],
-                        attr_name=env_var["attr_name"],
-                        attr_value=env_var["attr_value"],
-                        is_change=True,
-                        scope=env_var["scope"],
-                        user_name=user.get_username()
-                    )
-                except Exception:
-                    pass
-                    
-        except Exception:
-            pass
+            # 检查环境变量添加结果
+            if code != 200 and code != 412:  # 412表示环境变量已存在，这是可接受的
+                raise ServiceHandleException(
+                    msg=f"添加环境变量 {env_var['attr_name']} 失败: {msg}",
+                    msg_show="添加数据库环境变量失败"
+                )
     
     def _get_database_connect_info(self, service, region_name):
         """
         从 Block Mechanica API 获取数据库连接信息
-
+        
+        失败时抛出ServiceHandleException异常
         """
+        from console.exception.main import ServiceHandleException
+        
         try:
             request_data = {
                 "RBDService": {
@@ -166,11 +146,25 @@ class KubeBlocksService(object):
                         "username": connect_data.get("user", "root"),
                         "password": connect_data.get("password", "")
                     }
-            
-        except Exception:
-            pass
-        
-        return {"username": "", "password": ""}
+                else:
+                    raise ServiceHandleException(
+                        msg="KubeBlocks API 返回空的连接信息列表",
+                        msg_show="获取数据库连接信息为空"
+                    )
+            else:
+                status = res.get("status", "未知")
+                raise ServiceHandleException(
+                    msg=f"KubeBlocks API 调用失败，状态码: {status}",
+                    msg_show="获取数据库连接信息失败"
+                )
+                
+        except ServiceHandleException:
+            raise
+        except Exception as e:
+            raise ServiceHandleException(
+                msg=f"调用 KubeBlocks API 获取连接信息异常: {str(e)}",
+                msg_show="获取数据库连接信息异常"
+            )
     
     def _build_block_mechanica_request(self, cluster_params, new_service, namespace):
         """

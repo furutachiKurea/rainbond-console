@@ -41,6 +41,7 @@ from console.views.app_create.source_code import (AppCompileEnvView, SourceCodeC
 from console.views.app_create.source_outer import (ThirdPartyAppPodsView, ThirdPartyHealthzView, ThirdPartyServiceApiView,
                                                    ThirdPartyServiceCreateView, ThirdPartyUpdateSecretKeyView)
 from console.views.app_create.vm_run import VMRunCreateView
+from console.views.app_create.kubeblocks_create import KubeBlocksComponentCreateView
 from console.views.app_event import (AppEventLogView, AppEventsLogView, AppEventsView, AppEventView, AppHistoryLogView,
                                      AppLogInstanceView, AppLogView)
 from console.views.app_manage import (AgainDelete, BatchActionView, BatchDelete, ChangeServiceNameView, ChangeServiceTypeView,
@@ -475,6 +476,9 @@ urlpatterns = [
     url(r'^teams/(?P<tenantName>[\w\-]+)/apps/docker_compose$', DockerComposeCreateView.as_view(), perms.APP_OVERVIEW_CREATE),
     # 虚拟机镜像创建
     url(r'^teams/(?P<tenantName>[\w\-]+)/apps/vm_run$', VMRunCreateView.as_view(), perms.APP_OVERVIEW_CREATE),
+    # KubeBlocks组件创建
+    # TODO 等待前端调用
+    url(r'^teams/(?P<tenantName>[\w\-]+)/apps/kubeblocks$', KubeBlocksComponentCreateView.as_view(), perms.APP_OVERVIEW_CREATE),
     # 应用检测
     url(r'^teams/(?P<tenantName>[\w\-]+)/apps/(?P<serviceAlias>[\w\-]+)/check$', AppCheck.as_view(), perms.APP_OVERVIEW_CREATE),
     url(r'^teams/(?P<tenantName>[\w\-]+)/apps/(?P<serviceAlias>[\w\-]+)/lang-update$', LangUpdate.as_view()),
